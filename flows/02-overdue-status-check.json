@@ -1,0 +1,103 @@
+{
+  "name": "Daily Overdue Status Check",
+  "description": "Runs every weekday at 08:00 — finds overdue SharePoint items and notifies owners. Reusable pattern: update SiteAddress, ListName and column names to adapt.",
+  "trigger": {
+    "type": "Recurrence",
+    "recurrence": {
+      "frequency": "Week",
+      "interval": 1,
+      "schedule": {
+        "weekDays": ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+        "hours": [8],
+        "minutes": [0]
+      },
+      "timeZone": "GMT Standard Time"
+    }
+  },
+  "variables": {
+    "SiteAddress": "https://yourorg.sharepoint.com/sites/yoursite",
+    "ListName": "YourListName",
+    "ManagerEmail": "manager@yourorg.com"
+  },
+  "actions": [
+    {
+      "step": 1,
+      "name": "Initialise_OverdueCount",
+      "type": "InitializeVariable",
+      "inputs": {
+        "variableName": "OverdueCount",
+        "type": "Integer",
+        "value": 0
+      }
+    },
+    {
+      "step": 2,
+      "name": "GetItems_Overdue",
+      "type": "SharePoint_GetItems",
+      "inputs": {
+        "siteAddress": "@variables('SiteAddress')",
+        "listName": "@variables('ListName')",
+        "filterQuery": "DueDate lt '@{utcNow()}' and Status ne 'Complete' and Status ne 'Cancelled'",
+        "orderBy": "DueDate asc",
+        "top": 100
+      }
+    },
+    {
+      "step": 3,
+      "name": "Apply_ToEach_OverdueItem",
+      "type": "Foreach",
+      "foreach": "@body('GetItems_Overdue')?['value']",
+      "actions": [
+        {
+          "name": "Calculate_DaysOverdue",
+          "type": "Compose",
+          "inputs": "@div(sub(ticks(utcNow()), ticks(items('Apply_ToEach_OverdueItem')?['DueDate'])), 864000000000)"
+        },
+        {
+          "name": "Update_OverdueFlag",
+          "type": "SharePoint_UpdateItem",
+          "inputs": {
+            "siteAddress": "@variables('SiteAddress')",
+            "listName": "@variables('ListName')",
+            "id": "@items('Apply_ToEach_OverdueItem')?['ID']",
+            "OverdueFlag": "Yes",
+            "DaysOverdue": "@outputs('Calculate_DaysOverdue')"
+          }
+        },
+        {
+          "name": "Send_OverdueEmail",
+          "type": "SendEmail",
+          "inputs": {
+            "to": "@items('Apply_ToEach_OverdueItem')?['AssignedTo']?['Email']",
+            "subject": "⚠️ Action Required – @{items('Apply_ToEach_OverdueItem')?['Title']} is Overdue",
+            "body": "<p>The following item assigned to you is <strong>@{outputs('Calculate_DaysOverdue')} days overdue</strong>.</p><table><tr><td>Item:</td><td>@{items('Apply_ToEach_OverdueItem')?['Title']}</td></tr><tr><td>Due Date:</td><td>@{items('Apply_ToEach_OverdueItem')?['DueDate']}</td></tr><tr><td>Status:</td><td>@{items('Apply_ToEach_OverdueItem')?['Status']}</td></tr></table><p><a href='@{items('Apply_ToEach_OverdueItem')?['{Link}']}'>View Item</a></p>",
+            "isHtml": true
+          }
+        },
+        {
+          "name": "Increment_Counter",
+          "type": "IncrementVariable",
+          "inputs": { "variableName": "OverdueCount", "value": 1 }
+        }
+      ]
+    },
+    {
+      "step": 4,
+      "name": "Condition_SendManagerSummary",
+      "type": "Condition",
+      "expression": "@greater(variables('OverdueCount'), 0)",
+      "trueActions": [
+        {
+          "name": "Send_ManagerSummary",
+          "type": "SendEmail",
+          "inputs": {
+            "to": "@variables('ManagerEmail')",
+            "subject": "Daily Overdue Report – @{variables('OverdueCount')} items overdue",
+            "body": "<p>There are currently <strong>@{variables('OverdueCount')} overdue items</strong> in @{variables('ListName')}.</p><p>Individual notifications have been sent to each item owner.</p>",
+            "isHtml": true
+          }
+        }
+      ]
+    }
+  ]
+}

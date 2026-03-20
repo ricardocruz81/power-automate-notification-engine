@@ -1,0 +1,50 @@
+{
+  "name": "Item Changed Alert",
+  "description": "Fires when any SharePoint item is modified. Notifies the assigned person and logs the change. Reusable: update SiteAddress, ListName, NotifyColumn.",
+  "trigger": {
+    "type": "SharePoint_ItemModified",
+    "inputs": {
+      "siteAddress": "https://yourorg.sharepoint.com/sites/yoursite",
+      "listName": "YourListName"
+    }
+  },
+  "variables": {
+    "SiteAddress":   "https://yourorg.sharepoint.com/sites/yoursite",
+    "ListName":      "YourListName",
+    "NotifyColumn":  "AssignedTo",
+    "LogListName":   "ChangeAuditLog"
+  },
+  "actions": [
+    {
+      "step": 1,
+      "name": "Condition_StatusChanged",
+      "type": "Condition",
+      "expression": "@not(equals(triggerBody()?['Status']?['Value'], triggerOutputs()?['body/Status']?['Value']))",
+      "trueActions": [
+        {
+          "name": "Send_ChangeNotification",
+          "type": "SendEmail",
+          "inputs": {
+            "to": "@triggerBody()?['AssignedTo']?['Email']",
+            "subject": "Update: @{triggerBody()?['Title']} – Status Changed",
+            "body": "<p>The status of <b>@{triggerBody()?['Title']}</b> has been updated.</p><p><b>Modified by:</b> @{triggerBody()?['Editor']?['DisplayName']}<br><b>Modified:</b> @{formatDateTime(utcNow(), 'dd/MM/yyyy HH:mm')}</p><p><a href='@{triggerBody()?['{Link}']}'>View Item</a></p>",
+            "isHtml": true
+          }
+        },
+        {
+          "name": "Log_Change",
+          "type": "SharePoint_CreateItem",
+          "inputs": {
+            "siteAddress": "@variables('SiteAddress')",
+            "listName": "@variables('LogListName')",
+            "Title":        "@triggerBody()?['Title']",
+            "ItemID":       "@triggerBody()?['ID']",
+            "ChangeType":   "Status Updated",
+            "ChangedBy":    "@triggerBody()?['Editor']?['DisplayName']",
+            "ChangeDate":   "@utcNow()"
+          }
+        }
+      ]
+    }
+  ]
+}

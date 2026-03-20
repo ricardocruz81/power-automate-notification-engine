@@ -1,0 +1,129 @@
+{
+  "name": "Approval Pending Reminder",
+  "description": "Runs Monday and Thursday at 09:00. Finds items in Pending Approval status for more than 3 days and sends a chase to the approver. Escalates to manager after 7 days.",
+  "trigger": {
+    "type": "Recurrence",
+    "recurrence": {
+      "frequency": "Week",
+      "interval": 1,
+      "schedule": {
+        "weekDays": ["Monday", "Thursday"],
+        "hours": [9],
+        "minutes": [0]
+      },
+      "timeZone": "GMT Standard Time"
+    }
+  },
+  "variables": {
+    "SiteAddress":    "https://yourorg.sharepoint.com/sites/yoursite",
+    "ListName":       "YourListName",
+    "ManagerEmail":   "manager@yourorg.com",
+    "ChaseDaysMin":   3,
+    "EscalateDays":   7
+  },
+  "actions": [
+    {
+      "step": 1,
+      "name": "Initialise_ChaseCount",
+      "type": "InitializeVariable",
+      "inputs": {
+        "variableName": "ChaseCount",
+        "type": "Integer",
+        "value": 0
+      }
+    },
+    {
+      "step": 2,
+      "name": "Initialise_EscalateCount",
+      "type": "InitializeVariable",
+      "inputs": {
+        "variableName": "EscalateCount",
+        "type": "Integer",
+        "value": 0
+      }
+    },
+    {
+      "step": 3,
+      "name": "GetItems_PendingApproval",
+      "type": "SharePoint_GetItems",
+      "inputs": {
+        "siteAddress": "@variables('SiteAddress')",
+        "listName": "@variables('ListName')",
+        "filterQuery": "ApprovalStatus eq 'Pending' and SubmittedDate le '@{addDays(utcNow(), -3)}'",
+        "orderBy": "SubmittedDate asc",
+        "top": 100
+      }
+    },
+    {
+      "step": 4,
+      "name": "Apply_ToEach_PendingItem",
+      "type": "Foreach",
+      "foreach": "@body('GetItems_PendingApproval')?['value']",
+      "actions": [
+        {
+          "name": "Calculate_DaysPending",
+          "type": "Compose",
+          "inputs": "@div(sub(ticks(utcNow()), ticks(items('Apply_ToEach_PendingItem')?['SubmittedDate'])), 864000000000)"
+        },
+        {
+          "name": "Condition_EscalateOrChase",
+          "type": "Condition",
+          "expression": "@greaterOrEquals(outputs('Calculate_DaysPending'), 7)",
+          "trueActions": [
+            {
+              "name": "Email_Escalation",
+              "type": "SendEmail",
+              "inputs": {
+                "to": "@variables('ManagerEmail')",
+                "cc": "@items('Apply_ToEach_PendingItem')?['ApproverName']?['Email']",
+                "subject": "🔴 Escalation – Approval Overdue @{outputs('Calculate_DaysPending')} Days: @{items('Apply_ToEach_PendingItem')?['Title']}",
+                "body": "<p>This item has been awaiting approval for <b>@{outputs('Calculate_DaysPending')} days</b> and requires your attention.</p><table><tr><td><b>Item:</b></td><td>@{items('Apply_ToEach_PendingItem')?['Title']}</td></tr><tr><td><b>Submitted By:</b></td><td>@{items('Apply_ToEach_PendingItem')?['SubmittedBy']?['DisplayName']}</td></tr><tr><td><b>Submitted Date:</b></td><td>@{formatDateTime(items('Apply_ToEach_PendingItem')?['SubmittedDate'], 'dd/MM/yyyy')}</td></tr><tr><td><b>Assigned Approver:</b></td><td>@{items('Apply_ToEach_PendingItem')?['ApproverName']?['DisplayName']}</td></tr></table><p><a href='@{items('Apply_ToEach_PendingItem')?['{Link}']}'>View and Action Item</a></p>",
+                "isHtml": true
+              }
+            },
+            {
+              "name": "Increment_EscalateCount",
+              "type": "IncrementVariable",
+              "inputs": { "variableName": "EscalateCount", "value": 1 }
+            }
+          ],
+          "falseActions": [
+            {
+              "name": "Email_ApprovalReminder",
+              "type": "SendEmail",
+              "inputs": {
+                "to": "@items('Apply_ToEach_PendingItem')?['ApproverName']?['Email']",
+                "subject": "🔔 Reminder – Approval Required: @{items('Apply_ToEach_PendingItem')?['Title']}",
+                "body": "<p>This is a reminder that the following item is awaiting your approval.</p><table><tr><td><b>Item:</b></td><td>@{items('Apply_ToEach_PendingItem')?['Title']}</td></tr><tr><td><b>Submitted By:</b></td><td>@{items('Apply_ToEach_PendingItem')?['SubmittedBy']?['DisplayName']}</td></tr><tr><td><b>Submitted:</b></td><td>@{formatDateTime(items('Apply_ToEach_PendingItem')?['SubmittedDate'], 'dd/MM/yyyy')} (@{outputs('Calculate_DaysPending')} days ago)</td></tr></table><p><a href='@{items('Apply_ToEach_PendingItem')?['{Link}']}'>Approve or Reject</a></p><p><i>Note: Items pending for more than 7 days will be escalated to your manager.</i></p>",
+                "isHtml": true
+              }
+            },
+            {
+              "name": "Increment_ChaseCount",
+              "type": "IncrementVariable",
+              "inputs": { "variableName": "ChaseCount", "value": 1 }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "step": 5,
+      "name": "Condition_SendRunSummary",
+      "type": "Condition",
+      "expression": "@greater(add(variables('ChaseCount'), variables('EscalateCount')), 0)",
+      "trueActions": [
+        {
+          "name": "Email_RunSummary",
+          "type": "SendEmail",
+          "inputs": {
+            "to": "@variables('ManagerEmail')",
+            "subject": "Approval Reminder Run Complete – @{add(variables('ChaseCount'), variables('EscalateCount'))} items chased",
+            "body": "<p>Approval reminder run completed.</p><ul><li>Reminders sent: @{variables('ChaseCount')}</li><li>Escalations sent: @{variables('EscalateCount')}</li></ul>",
+            "isHtml": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "name": "Expiry Warning Notifications",
+  "description": "Runs weekly on Monday at 08:00. Scans for items expiring within 30 days and sends tiered warnings: Notice (30 days), Warning (14 days), Urgent (7 days). Reusable across any SharePoint list with an ExpiryDate column.",
+  "trigger": {
+    "type": "Recurrence",
+    "recurrence": {
+      "frequency": "Week",
+      "interval": 1,
+      "schedule": {
+        "weekDays": ["Monday"],
+        "hours": [8],
+        "minutes": [0]
+      },
+      "timeZone": "GMT Standard Time"
+    }
+  },
+  "variables": {
+    "SiteAddress":     "https://yourorg.sharepoint.com/sites/yoursite",
+    "ListName":        "YourListName",
+    "NotifyColumn":    "DocumentOwner",
+    "ExpiryColumn":    "ExpiryDate",
+    "StatusColumn":    "Status",
+    "ExcludeStatus":   "Archived",
+    "LookAheadDays":   30
+  },
+  "actions": [
+    {
+      "step": 1,
+      "name": "Initialise_Counters",
+      "type": "InitializeVariable",
+      "inputs": { "variableName": "NoticeCount",  "type": "Integer", "value": 0 }
+    },
+    {
+      "step": 2,
+      "name": "GetItems_ExpiringWithin30Days",
+      "type": "SharePoint_GetItems",
+      "inputs": {
+        "siteAddress": "@variables('SiteAddress')",
+        "listName":    "@variables('ListName')",
+        "filterQuery": "ExpiryDate le '@{addDays(utcNow(), 30)}' and ExpiryDate ge '@{utcNow()}' and Status ne 'Archived' and Status ne 'Cancelled'",
+        "orderBy":     "ExpiryDate asc",
+        "top":         200
+      }
+    },
+    {
+      "step": 3,
+      "name": "Apply_ToEach_ExpiringItem",
+      "type": "Foreach",
+      "foreach": "@body('GetItems_ExpiringWithin30Days')?['value']",
+      "actions": [
+        {
+          "name": "Calculate_DaysUntilExpiry",
+          "type": "Compose",
+          "inputs": "@div(sub(ticks(items('Apply_ToEach_ExpiringItem')?['ExpiryDate']), ticks(utcNow())), 864000000000)"
+        },
+        {
+          "name": "Set_UrgencyLevel",
+          "type": "Compose",
+          "inputs": "@if(lessOrEquals(outputs('Calculate_DaysUntilExpiry'), 7), 'URGENT', if(lessOrEquals(outputs('Calculate_DaysUntilExpiry'), 14), 'WARNING', 'NOTICE'))"
+        },
+        {
+          "name": "Set_EmailPrefix",
+          "type": "Compose",
+          "inputs": "@if(equals(outputs('Set_UrgencyLevel'), 'URGENT'), '🔴 URGENT', if(equals(outputs('Set_UrgencyLevel'), 'WARNING'), '⚠️ Warning', '📋 Notice'))"
+        },
+        {
+          "name": "Send_ExpiryEmail",
+          "type": "SendEmail",
+          "inputs": {
+            "to": "@items('Apply_ToEach_ExpiringItem')?['DocumentOwner']?['Email']",
+            "subject": "@{outputs('Set_EmailPrefix')}: @{items('Apply_ToEach_ExpiringItem')?['Title']} expires in @{outputs('Calculate_DaysUntilExpiry')} days",
+            "body": "<p>The following item is due to expire soon and requires your attention.</p><table style='border-collapse:collapse;'><tr><td style='padding:4px 12px;'><b>Item:</b></td><td>@{items('Apply_ToEach_ExpiringItem')?['Title']}</td></tr><tr><td style='padding:4px 12px;'><b>Expiry Date:</b></td><td>@{formatDateTime(items('Apply_ToEach_ExpiringItem')?['ExpiryDate'], 'dd MMMM yyyy')}</td></tr><tr><td style='padding:4px 12px;'><b>Days Remaining:</b></td><td><b>@{outputs('Calculate_DaysUntilExpiry')}</b></td></tr><tr><td style='padding:4px 12px;'><b>Current Status:</b></td><td>@{items('Apply_ToEach_ExpiringItem')?['Status']}</td></tr></table><br><p>Please take one of the following actions:</p><ul><li>Renew the item and update the Expiry Date</li><li>Archive the item if it is no longer needed</li><li>Contact your line manager if you are unsure</li></ul><p><a href='@{items('Apply_ToEach_ExpiringItem')?['{Link}']}'>View Item in SharePoint</a></p>",
+            "isHtml": true
+          }
+        },
+        {
+          "name": "Increment_NoticeCount",
+          "type": "IncrementVariable",
+          "inputs": { "variableName": "NoticeCount", "value": 1 }
+        }
+      ]
+    }
+  ]
+}
